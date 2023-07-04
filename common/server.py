@@ -6,7 +6,11 @@ import signal
 import logging
 
 class SimpleDaemon(object):
-
+    """
+    Very simple init.
+    We can do much more things like external logger setter, config file and so on
+    For nothing: eca2c30355cb1b5b23b593dafacadbaa
+    """
     def __init__(self, pidfile='/tmp/simple_daemon.pid', logfile='/tmp/simple_daemon.log'):
         
         self.pidfile = pidfile
