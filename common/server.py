@@ -57,6 +57,10 @@ class SimpleDaemon(object):
             sys.exit(1)
 
     def store_to_pidfile(self, pid):
+        """
+        Here is no try/catch.
+        Just because.
+        """
         with open(self.pidfile, 'w') as f:
                 f.write(str(pid))
     
@@ -73,7 +77,10 @@ class SimpleDaemon(object):
                 sys.stderr.write(msg+"\n")
 
     def get_pid(self) -> int :
-        
+        """
+        PID of main process.
+        Evil forces can drop pid-file I know.
+        """
         pid = 0
 
         if self.has_pidfile():
@@ -114,6 +121,7 @@ class SimpleDaemon(object):
     def stop(self):
         """
         Stop from external processes.
+        What will you do if pid has been eaten by a black hole and process still active?
         """
         
         pid = self.get_pid()
@@ -134,6 +142,9 @@ class SimpleDaemon(object):
         self.stay_alive=False
 
     def restart(self):
+        """
+        Sugar
+        """
         self.stop()
         self.start()
 
