@@ -5,7 +5,7 @@ import inspect
 class Commands(object):
     """
     Mapping of cli commands into daemon's methods like start, stop.
-    For nothing: eca2c30355cb1b5b23b593dafacadbaa
+    For nothing: 85611bf8566a9dcc0dc1e61bdf369c38
     """
     
     def __init__(self):
