@@ -5,6 +5,35 @@ import time
 import signal
 import logging
 
+class SimpleDaemonContext(object):
+    """
+    This context object used just because we can.
+    It throws to children to provide some info about parent and 
+    avoid different signal handlers for processes by default (yes, you can redefine it in worker)
+    """
+    def __init__(self):
+        
+        self.__dict__['stay_alive'] = True
+        self.__dict__['main_pid'] = 0
+    
+    def __setattr__(self, key, value):
+        
+        if key=='main_pid':
+            if self.main_pid == 0:
+                self.__dict__[key] = value
+        else:
+            self.__dict__[key] = value
+        
+    def __getattr__(self, key):
+        if key in self.__dict__:
+            return self.__dict__[key]
+        else:
+            return None
+    
+    def __delattr__(self, name):
+        if name in self.__dict__ and name not in ['stay_alive', 'main_pid']:
+            del self.__dict__[name]
+
 class SimpleDaemon(object):
     """
     Very simple init.
@@ -18,12 +47,9 @@ class SimpleDaemon(object):
         
         self.loop_delay = 1
         
-        self.stay_alive=True
+        self.context = SimpleDaemonContext()
         
-        self.worker_func = {
-            'fn': False,
-            'args': False
-        }
+        self.worker_func = []
         
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.INFO)
@@ -31,6 +57,7 @@ class SimpleDaemon(object):
         log_handler = logging.FileHandler(self.logfile, mode='a')
         log_formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
         log_handler.setFormatter(log_formatter)
+        
         self.logger.addHandler(log_handler)
 
     def daemonize(self):
@@ -90,8 +117,10 @@ class SimpleDaemon(object):
         return pid
 
     def clear_on_exit(self):
-        self.logger.info("Clear all")
-        self.drop_pidfile()
+        # clear all from main process only
+        if os.getpid() == self.context.main_pid:
+            self.logger.info("Clear all")
+            self.drop_pidfile()
 
     def start(self):
         
@@ -110,6 +139,8 @@ class SimpleDaemon(object):
         pid = os.getpid()
         
         self.store_to_pidfile(pid)
+        
+        self.context.main_pid = pid
         
         signal.signal(signal.SIGTERM, self.shutdown)
         signal.signal(signal.SIGINT, self.shutdown)
@@ -137,9 +168,8 @@ class SimpleDaemon(object):
         """
         Stop at the same process
         """
-        
-        self.logger.info("Shutdown daemon with signum %s" % signum )
-        self.stay_alive=False
+        self.logger.info("Shutdown process %s with signum %s" % (os.getpid(), signum))
+        self.context.stay_alive=False
 
     def restart(self):
         """
@@ -154,37 +184,76 @@ class SimpleDaemon(object):
         """
         def inner(callback):
             self.logger.info("New worked added: %s" % callback.__name__)
-            self.worker_func['fn'] = callback
-            self.worker_func['args'] = args
-            self.worker_func['kwargs'] = kwargs
+            self.worker_func.append({
+                'name' : callback.__name__,
+                'callback' : callback,
+                'args' : args,
+                'kwargs' : kwargs
+            })
         return inner
 
+    """
+    Do all hard work here
+    """
     def worker_loop(self):
-        """
-        Main loop to iterate worker.
-        Depends on posix signals and iterations counter.
-        Default is max_iterations=0 to run infinite loop.
-        It is possible to add a bunch of workers in the future.
-        """
         
-        self.logger.info("Worker loop start")
+        self.logger.info("Workers loop start")
         
-        iterations_counter = 0
-        max_iterations = int(self.worker_func['kwargs'].get('max_iterations', 0))
-        
-        loop_delay = int(self.worker_func['kwargs'].get('loop_delay', self.loop_delay))
-        
-        while self.stay_alive:
+        workers = {}
+
+        if len(self.worker_func) == 0:
+            self.logger.info("Workers loop stop. Empty workers list")
+            sys.exit(0)
+
+        # main loop
+        while self.context.stay_alive:
             
-            if max_iterations > 0:
-                iterations_counter = iterations_counter + 1
+            while len(workers)<len(self.worker_func):
+                for w in self.worker_func:
+                    if w['name'] not in workers:
+                        
+                        try:
+                            pid=os.fork()
+                            
+                            if pid==0:
+                                w['callback'](self.context)
+                                sys.exit(0)
+                            elif pid>0:
+                                workers[w['name']] = w
+                                workers[w['name']]['pid'] = pid
+                                self.logger.info("Worker %s start" % w['name'])
+                            
+                        except os.error as e:
+                            self.logger.error("fork #1 failed:%d (%s)" % (e.errno, e.strerror))
+                            sys.exit(1)
+                        
+            
+            for w in list(workers):
+                try:
+                    pid, exit_code = os.waitpid(workers[w]['pid'], os.WNOHANG)
+                    if pid>0:
+                        workers.pop(w)
+                except:
+                    pass
                 
-            if iterations_counter > max_iterations:
-                self.logger.info("Shutdown daemon on max_iterations=%s" % max_iterations )
-                break
-            
-            self.worker_func['fn'](self)
-            time.sleep(loop_delay)
-            
-            
-        self.logger.info("Worker loop end")
+            time.sleep(1)
+        
+        # stopping children
+        self.logger.info("Stopping children")
+        for w in workers:
+            os.kill(workers[w]['pid'], signal.SIGTERM)
+        
+        # waiting children to end
+        self.logger.info("Waiting children to end")
+        while len(workers):
+            for w in list(workers):
+                try:
+                    pid, exit_code = os.waitpid(workers[w]['pid'], os.WNOHANG)
+                    if pid>0:
+                        self.logger.info("Worker %s end" % workers[w]['name'])
+                        workers.pop(w)
+                except:
+                    pass
+            time.sleep(0.2)
+
+        self.logger.info("Workers loop end")
