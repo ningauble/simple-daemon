@@ -4,6 +4,7 @@ import sys
 import time
 import signal
 import logging
+import setproctitle
 
 class SimpleDaemonContext(object):
     """
@@ -147,6 +148,8 @@ class SimpleDaemon(object):
         
         atexit.register(self.clear_on_exit)
         
+        setproctitle.setproctitle("%s: main" % __name__)
+        
         self.worker_loop()
     
     def stop(self):
@@ -216,6 +219,7 @@ class SimpleDaemon(object):
                             pid=os.fork()
                             
                             if pid==0:
+                                setproctitle.setproctitle("%s: %s" % (__name__, w['name']))
                                 w['callback'](self.context)
                                 sys.exit(0)
                             elif pid>0:
